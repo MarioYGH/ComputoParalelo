@@ -1,0 +1,137 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <omp.h>
+
+#define N 512  // Tamaño de la matriz NxN (ajustar según recursos)
+
+static float A[N*N], B[N*N], C_serial[N*N], C_parallel[N*N], C_gpu[N*N];
+
+// Función para multiplicación de matrices en CPU en modo serial
+void matmul_serial(const float* A, const float* B, float* C, int n) {
+    for(int i = 0; i < n; i++) {
+        for(int j = 0; j < n; j++) {
+            float temp = 0.0f;
+            for(int k = 0; k < n; k++) {
+                temp += A[i*n + k] * B[k*n + j];
+            }
+            C[i*n + j] = temp;
+        }
+    }
+}
+
+// Función para multiplicación de matrices en CPU en modo paralelo (OpenMP)
+void matmul_parallel(const float* A, const float* B, float* C, int n) {
+#pragma omp parallel for
+    for(int i = 0; i < n; i++) {
+        for(int j = 0; j < n; j++) {
+            float temp = 0.0f;
+            for(int k = 0; k < n; k++) {
+                temp += A[i*n + k] * B[k*n + j];
+            }
+            C[i*n + j] = temp;
+        }
+    }
+}
+
+// Función principal
+int main() {
+    // 1) Inicializar matrices A y B
+    for(int i = 0; i < N; i++) {
+        for(int j = 0; j < N; j++) {
+            A[i*N + j] = (float)(i + j);       // Ejemplo sencillo
+            B[i*N + j] = (float)(i - j) * 0.5f;
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 2) CPU Serial
+    // -----------------------------------------------------------------------------------------
+    double start = omp_get_wtime();
+    matmul_serial(A, B, C_serial, N);
+    double end = omp_get_wtime();
+    double time_serial = end - start;
+    printf("Tiempo CPU (Serial): %f s\n", time_serial);
+
+    // -----------------------------------------------------------------------------------------
+    // 3) CPU Paralelo (OpenMP)
+    // -----------------------------------------------------------------------------------------
+    omp_set_num_threads(16); // Modificar de acuerdo a no de hilos
+    start = omp_get_wtime();
+    matmul_parallel(A, B, C_parallel, N);
+    end = omp_get_wtime();
+    double time_parallel = end - start;
+    printf("Tiempo CPU (Paralelo con OpenMP): %f s\n", time_parallel);
+
+    // -----------------------------------------------------------------------------------------
+    // 4) GPU Offloading
+    // -----------------------------------------------------------------------------------------
+    start = omp_get_wtime();
+
+    // Se transfiere A y B al dispositivo, y C_gpu se transfiere de vuelta después del cómputo
+#pragma omp target map(to:A[0:N*N], B[0:N*N]) map(from:C_gpu[0:N*N])
+    {
+        // Paralelizar el bucle en la GPU
+#pragma omp parallel for
+        for(int i = 0; i < N; i++) {
+            for(int j = 0; j < N; j++) {
+                float temp = 0.0f;
+                for(int k = 0; k < N; k++) {
+                    temp += A[i*N + k] * B[k*N + j];
+                }
+                C_gpu[i*N + j] = temp;
+            }
+        }
+    }
+    end = omp_get_wtime();
+    double time_gpu = end - start;
+    printf("Tiempo GPU (Offloading OpenMP): %f s\n", time_gpu);
+
+    // -----------------------------------------------------------------------------------------
+    // 5) Verificación y comparación de resultados
+    // -----------------------------------------------------------------------------------------
+    float max_diff_par = 0.0f;
+    float max_diff_gpu = 0.0f;
+    for(int i = 0; i < N*N; i++) {
+        // Diferencia entre serial y paralelo
+        float diff_par = C_serial[i] - C_parallel[i];
+        if(diff_par < 0) diff_par = -diff_par;
+        if(diff_par > max_diff_par) max_diff_par = diff_par;
+
+        // Diferencia entre serial y GPU
+        float diff_gpu = C_serial[i] - C_gpu[i];
+        if(diff_gpu < 0) diff_gpu = -diff_gpu;
+        if(diff_gpu > max_diff_gpu) max_diff_gpu = diff_gpu;
+    }
+
+    printf("Max diferencia (Serial vs Paralelo) = %f\n", max_diff_par);
+    printf("Max diferencia (Serial vs GPU)      = %f\n", max_diff_gpu);
+
+    // -----------------------------------------------------------------------------------------
+    // 6) Calcular Speedup
+    // -----------------------------------------------------------------------------------------
+    // Speedup de la versión paralela con respecto a la serial
+    double speedup_parallel = time_serial / time_parallel;
+    // Speedup de la versión GPU con respecto a la serial
+    double speedup_gpu = time_serial / time_gpu;
+
+    printf("Speedup Paralelo vs Serial  = %f\n", speedup_parallel);
+    printf("Speedup GPU vs Serial       = %f\n", speedup_gpu);
+
+    // -----------------------------------------------------------------------------------------
+    // 7) Opcional: Cálculo de eficiencia
+    // -----------------------------------------------------------------------------------------
+    // Eficiencia = Speedup / #hilos (para CPU). Por ejemplo, si configuramos OMP_NUM_THREADS=8, etc.
+    // Para GPU, es más complejo (depende de los SMs, hilos, etc.), pero aquí se ilustra conceptualmente.
+    int num_threads = 1;
+#pragma omp parallel
+    {
+#pragma omp single
+        {
+            num_threads = omp_get_num_threads();
+        }
+    }
+    double eficiencia_parallel = speedup_parallel / num_threads;
+    printf("Eficiencia Paralelo = %f (con %d hilos)\n", eficiencia_parallel, num_threads);
+
+    return 0;
+}
