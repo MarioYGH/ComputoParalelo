@@ -1,0 +1,52 @@
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <omp.h>
+
+using namespace cv;
+using namespace std;
+
+int main() {
+    VideoCapture cap(0);
+    if (!cap.isOpened()) {
+        cerr << "No se pudo abrir la cámara.\n";
+        return -1;
+    }
+
+    Mat frame, output;
+    double t1, t2;
+
+    while (true) {
+        cap >> frame;
+        if (frame.empty()) break;
+
+        output = frame.clone();
+
+        // --- MEDIR TIEMPO ---
+        t1 = omp_get_wtime();
+
+        // --- PROCESAMIENTO PARALELO ---
+#pragma omp parallel for collapse(2)
+        for (int y = 0; y < frame.rows; y++) {
+            for (int x = 0; x < frame.cols; x++) {
+                Vec3b pixel = frame.at<Vec3b>(y, x);
+                Vec3b& result = output.at<Vec3b>(y, x);
+                result[0] = 255 - pixel[0]; // Blue
+                result[1] = 255 - pixel[1]; // Green
+                result[2] = 255 - pixel[2]; // Red
+            }
+        }
+
+        t2 = omp_get_wtime();
+        double tiempo_ms = (t2 - t1) * 1000;
+
+        putText(output, format("OpenMP: %.2f ms", tiempo_ms),
+            Point(20, 40), FONT_HERSHEY_SIMPLEX, 1, Scalar(0, 255, 0), 2);
+
+        imshow("Negativo con OpenMP", output);
+        if (waitKey(1) == 27) break; // ESC para salir
+    }
+
+    cap.release();
+    destroyAllWindows();
+    return 0;
+}

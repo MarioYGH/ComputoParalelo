@@ -1,0 +1,54 @@
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <ctime>  // Para medir tiempo
+
+using namespace cv;
+using namespace std;
+
+int main() {
+    VideoCapture cap(0);
+    if (!cap.isOpened()) {
+        cerr << "No se pudo abrir la cámara.\n";
+        return -1;
+    }
+
+    Mat frame, output;
+    clock_t inicio, fin;
+    double tiempo_ms;
+
+    while (true) {
+        cap >> frame;
+        if (frame.empty()) break;
+
+        output = frame.clone();
+
+        // --- Medir tiempo usando <ctime> ---
+        inicio = clock();
+
+        // --- PROCESAMIENTO SECUENCIAL (NEGATIVO) ---
+        for (int y = 0; y < frame.rows; y++) {
+            for (int x = 0; x < frame.cols; x++) {
+                Vec3b pixel = frame.at<Vec3b>(y, x);
+                Vec3b& result = output.at<Vec3b>(y, x);
+                result[0] = 255 - pixel[0]; // Blue
+                result[1] = 255 - pixel[1]; // Green
+                result[2] = 255 - pixel[2]; // Red
+            }
+        }
+
+        fin = clock();
+        tiempo_ms = 1000.0 * (fin - inicio) / CLOCKS_PER_SEC;
+
+        // Mostrar tiempo sobre la imagen
+        putText(output, format("Secuencial (ctime): %.2f ms", tiempo_ms),
+            Point(20, 40), FONT_HERSHEY_SIMPLEX, 1, Scalar(255, 0, 0), 2);
+
+        imshow("Negativo SECUENCIAL", output);
+
+        if (waitKey(1) == 27) break; // ESC para salir
+    }
+
+    cap.release();
+    destroyAllWindows();
+    return 0;
+}
