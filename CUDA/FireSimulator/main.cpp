@@ -86,7 +86,7 @@ int main() {
 
     stbi_image_free(image);
 
-    const int steps = 500;
+    const int steps = 200;
 
     // SIMULACIÓN EN CPU
     std::vector<int> state_cpu = state;
