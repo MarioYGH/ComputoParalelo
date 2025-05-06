@@ -1,13 +1,13 @@
 // Alternar signos en un arreglo
 // Objetivo: Modificar un arreglo de enteros de tal forma que los elementos en posiciones pares sean positivos y los impares negativos.
 // Instrucciones:
-// • Escribe un kernel CUDA que tome un arreglo A de enteros y lo modifique as ́ı:
-//  – Si el  ́ındice global i es par, entonces A[i] = abs(A[i]).
-//  – Si es impar, entonces A[i] = -abs(A[i]).
-// • Usa un arreglo de tama ̃no n = 128 y blockDim.x = 32.
+//  • Escribe un kernel CUDA que tome un arreglo A de enteros y lo modifique as ́ı:
+//   – Si el  ́ındice global i es par, entonces A[i] = abs(A[i]).
+//   – Si es impar, entonces A[i] = -abs(A[i]).
+//  • Usa un arreglo de tama ̃no n = 128 y blockDim.x = 32.
 // Requisitos:
-// • El kernel debe usar indexaci ́on con threadIdx.x, blockIdx.x y blockDim.x.
-// • Verificar que i < n.
+//  • El kernel debe usar indexaci ́on con threadIdx.x, blockIdx.x y blockDim.x.
+//  • Verificar que i < n.
 
 #include <iostream>
 #include <cstdlib>   // Para rand() y abs()
