@@ -195,7 +195,7 @@ __global__ void ifft1DRowKernel(float* realIn, float* imagIn, float* realOut, in
         sum += real * cosf(angle) - imag * sinf(angle);  // Parte real de la IFFT
     }
 
-    realOut[IDX(x, y, width)] = sum / (width * height);  
+    realOut[IDX(x, y, width)] = sum;  // Sin dividir aún
 }
 
 __global__ void ifft1DColKernel(float* realIn, float* imagIn, float* realOut, int width, int height) {
@@ -214,8 +214,9 @@ __global__ void ifft1DColKernel(float* realIn, float* imagIn, float* realOut, in
         sum += real * cosf(angle) - imag * sinf(angle);  // Parte real de la IFFT
     }
 
-    realOut[IDX(x, y, width)] = sum / (width * height);  
+    realOut[IDX(x, y, width)] = sum;  // Sin dividir aún
 }
+
 
 void cropImage(float* src, float* dst, int origWidth, int origHeight, int paddedWidth) {
     for (int y = 0; y < origHeight; ++y) {
@@ -255,11 +256,19 @@ int main() {
     dim3 block(16, 16);
     dim3 grid((width + 15) / 16, (height + 15) / 16);
 
-    // FFT directa: filas
+    // Eventos para medir tiempo
+    cudaEvent_t startFFT, endFFT, startIFFT, endIFFT;
+    cudaEventCreate(&startFFT);
+    cudaEventCreate(&endFFT);
+    cudaEventCreate(&startIFFT);
+    cudaEventCreate(&endIFFT);
+
+    // ----------- FFT directa (filas y columnas) -----------
+    cudaEventRecord(startFFT);
+
     fft1DRowKernel<<<grid, block>>>(d_input, d_realOut, d_imagOut, width, height);
     cudaDeviceSynchronize();
 
-    // FFT directa: columnas con buffer temporal
     float* d_tempReal;
     cudaMalloc(&d_tempReal, sizeof(float) * width * height);
 
@@ -269,7 +278,14 @@ int main() {
     cudaMemcpy(d_realOut, d_tempReal, sizeof(float) * width * height, cudaMemcpyDeviceToDevice);
     cudaFree(d_tempReal);
 
-    // Magnitud y visualización
+    cudaEventRecord(endFFT);
+    cudaEventSynchronize(endFFT);
+
+    float elapsedFFT = 0.0f;
+    cudaEventElapsedTime(&elapsedFFT, startFFT, endFFT);
+    std::cout << "Tiempo FFT directa: " << elapsedFFT << " ms\n";
+
+    // ----------- Magnitud y guardado -----------
     float* h_real = new float[width * height];
     float* h_imag = new float[width * height];
     float* h_magnitude = new float[width * height];
@@ -282,25 +298,38 @@ int main() {
     savePGM(outputFFT, h_magnitude, width, height);
     std::cout << "Imagen de la magnitud FFT guardada como " << outputFFT << "\n";
 
-    // FFT inversa: columnas y luego filas
+    // ----------- IFFT (col + filas) -----------
+    cudaMemset(d_imagOut, 0, sizeof(float) * width * height);
+
+    cudaEventRecord(startIFFT);
+
     ifft1DColKernel<<<grid, block>>>(d_realOut, d_imagOut, d_realOut, width, height);
     cudaDeviceSynchronize();
 
     ifft1DRowKernel<<<grid, block>>>(d_realOut, d_imagOut, d_realOut, width, height);
     cudaDeviceSynchronize();
 
-    // Recibir imagen reconstruida
+    cudaEventRecord(endIFFT);
+    cudaEventSynchronize(endIFFT);
+
+    float elapsedIFFT = 0.0f;
+    cudaEventElapsedTime(&elapsedIFFT, startIFFT, endIFFT);
+    std::cout << "Tiempo IFFT (reconstrucción): " << elapsedIFFT << " ms\n";
+
+    // ----------- Imagen reconstruida -----------
     float* h_reconstructed = new float[width * height];
     cudaMemcpy(h_reconstructed, d_realOut, sizeof(float) * width * height, cudaMemcpyDeviceToHost);
 
-    // Recortar a tamaño original
+    for (int i = 0; i < width * height; ++i)
+        h_reconstructed[i] /= (width * height);
+
     float* h_final = new float[originalWidth * originalHeight];
     cropImage(h_reconstructed, h_final, originalWidth, originalHeight, width);
 
     savePGM(outputReconstructed, h_final, originalWidth, originalHeight);
     std::cout << "Imagen reconstruida guardada como " << outputReconstructed << "\n";
 
-    // Liberar memoria
+    // ----------- Liberación de recursos -----------
     delete[] h_input;
     delete[] h_real;
     delete[] h_imag;
@@ -312,5 +341,11 @@ int main() {
     cudaFree(d_realOut);
     cudaFree(d_imagOut);
 
+    cudaEventDestroy(startFFT);
+    cudaEventDestroy(endFFT);
+    cudaEventDestroy(startIFFT);
+    cudaEventDestroy(endIFFT);
+
     return 0;
 }
+
