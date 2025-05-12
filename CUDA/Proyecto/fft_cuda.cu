@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <sstream> 
 
+
 #define IDX(x, y, width) ((y)*(width) + (x))
 
 // ------------------------
@@ -225,11 +226,10 @@ void cropImage(float* src, float* dst, int origWidth, int origHeight, int padded
         }
     }
 }
-
 // ------------------------
 // Función principal
 int main() {
-    const char* input = "barbara.ascii.pgm";
+    const char* input = "lena.pgm";
     const char* outputFFT = "resultado.pgm";
     const char* outputReconstructed = "reconstruida.pgm";
 
@@ -299,18 +299,23 @@ int main() {
     std::cout << "Imagen de la magnitud FFT guardada como " << outputFFT << "\n";
 
     // ----------- IFFT (col + filas) -----------
-    cudaMemset(d_imagOut, 0, sizeof(float) * width * height);
+    float* d_ifftTemp;
+    cudaMalloc(&d_ifftTemp, sizeof(float) * width * height);
 
     cudaEventRecord(startIFFT);
 
-    ifft1DColKernel<<<grid, block>>>(d_realOut, d_imagOut, d_realOut, width, height);
+    // Primero IFFT en columnas
+    ifft1DColKernel<<<grid, block>>>(d_realOut, d_imagOut, d_ifftTemp, width, height);
     cudaDeviceSynchronize();
 
-    ifft1DRowKernel<<<grid, block>>>(d_realOut, d_imagOut, d_realOut, width, height);
+    // Luego IFFT en filas
+    cudaMemset(d_imagOut, 0, sizeof(float) * width * height); // Imag no se usa aquí, puede ser 0
+    ifft1DRowKernel<<<grid, block>>>(d_ifftTemp, d_imagOut, d_realOut, width, height);
     cudaDeviceSynchronize();
 
     cudaEventRecord(endIFFT);
     cudaEventSynchronize(endIFFT);
+    cudaFree(d_ifftTemp);
 
     float elapsedIFFT = 0.0f;
     cudaEventElapsedTime(&elapsedIFFT, startIFFT, endIFFT);
