@@ -104,16 +104,11 @@ void calculateMagnitudeAndNormalize(float* real, float* imag, float* output, int
     for (int i = 0; i < width * height; ++i) {
         float mag = sqrtf(real[i] * real[i] + imag[i] * imag[i]);
         output[i] = logf(1.0f + mag);
-        if (output[i] > maxVal) maxVal = output[i];
+        maxVal = fmaxf(maxVal, output[i]);
     }
 
-    if (maxVal > 0.0f) {
-        for (int i = 0; i < width * height; ++i)
-            output[i] = 255.0f * output[i] / maxVal;
-    } else {
-        for (int i = 0; i < width * height; ++i)
-            output[i] = 0.0f;
-    }
+    for (int i = 0; i < width * height; ++i)
+        output[i] = 255.0f * output[i] / maxVal;
 }
 
 void applyFFTShift(float* data, int width, int height) {
@@ -137,54 +132,53 @@ void applyFFTShift(float* data, int width, int height) {
     }
 }
 
-
 // ------------------------
 // Kernel para la FFT 1D real en una fila
 __global__ void fft1DRowKernel(float* data, float* realOut, float* imagOut, int width, int height) {
-    int x = threadIdx.x + blockIdx.x * blockDim.x;
-    int y = threadIdx.y + blockIdx.y * blockDim.y;
+    int k = threadIdx.x + blockDim.x * blockIdx.x;
+    int y = threadIdx.y + blockDim.y * blockIdx.y;
 
-    if (x >= width || y >= height) return;
+    if (k >= width || y >= height) return;
 
     float real = 0.0f;
     float imag = 0.0f;
 
     for (int n = 0; n < width; ++n) {
         float value = data[IDX(n, y, width)];
-        float angle = -2.0f * M_PI * x * n / width;
+        float angle = -2.0f * M_PI * k * n / width;
         real += value * cosf(angle);
         imag += value * sinf(angle);
     }
 
-    realOut[IDX(x, y, width)] = real;
-    imagOut[IDX(x, y, width)] = imag;
+    int idx = IDX(k, y, width);
+    realOut[idx] = real;
+    imagOut[idx] = imag;
 }
-
 
 // ------------------------
 // Kernel para la FFT 1D real en una columna
 __global__ void fft1DColKernel(float* data, float* realOut, float* imagOut, int width, int height) {
-    int x = threadIdx.x + blockIdx.x * blockDim.x;
-    int y = threadIdx.y + blockIdx.y * blockDim.y;
+    int k = threadIdx.y + blockDim.y * blockIdx.y;
+    int x = threadIdx.x + blockDim.x * blockIdx.x;
 
-    if (x >= width || y >= height) return;
+    if (k >= height || x >= width) return;
 
     float real = 0.0f;
     float imag = 0.0f;
 
     for (int n = 0; n < height; ++n) {
         float value = data[IDX(x, n, width)];
-        float angle = -2.0f * M_PI * y * n / height;
+        float angle = -2.0f * M_PI * k * n / height;
         real += value * cosf(angle);
         imag += value * sinf(angle);
     }
 
-    realOut[IDX(x, y, width)] = real;
-    imagOut[IDX(x, y, width)] = imag;
+    int idx = IDX(x, k, width);
+    realOut[idx] = real;
+    imagOut[idx] = imag;
 }
 
 // ------------------------
-// Kernel para la IFFT 1D en filas
 __global__ void ifft1DRowKernel(float* realIn, float* imagIn, float* realOut, int width, int height) {
     int x = threadIdx.x + blockIdx.x * blockDim.x;
     int y = threadIdx.y + blockIdx.y * blockDim.y;
@@ -201,11 +195,9 @@ __global__ void ifft1DRowKernel(float* realIn, float* imagIn, float* realOut, in
         sum += real * cosf(angle) - imag * sinf(angle);  // Parte real de la IFFT
     }
 
-    realOut[IDX(x, y, width)] = sum / width;
+    realOut[IDX(x, y, width)] = sum;  // Sin dividir aún
 }
 
-// ------------------------
-// Kernel para la IFFT 1D en columnas
 __global__ void ifft1DColKernel(float* realIn, float* imagIn, float* realOut, int width, int height) {
     int x = threadIdx.x + blockIdx.x * blockDim.x;
     int y = threadIdx.y + blockIdx.y * blockDim.y;
@@ -222,7 +214,16 @@ __global__ void ifft1DColKernel(float* realIn, float* imagIn, float* realOut, in
         sum += real * cosf(angle) - imag * sinf(angle);  // Parte real de la IFFT
     }
 
-    realOut[IDX(x, y, width)] = sum / height;
+    realOut[IDX(x, y, width)] = sum;  // Sin dividir aún
+}
+
+
+void cropImage(float* src, float* dst, int origWidth, int origHeight, int paddedWidth) {
+    for (int y = 0; y < origHeight; ++y) {
+        for (int x = 0; x < origWidth; ++x) {
+            dst[IDX(x, y, origWidth)] = src[IDX(x, y, paddedWidth)];
+        }
+    }
 }
 
 // ------------------------
@@ -240,6 +241,7 @@ int main() {
         return 1;
     }
 
+    int originalWidth = width, originalHeight = height;
     std::cout << "Dimensiones originales: " << width << " x " << height << std::endl;
 
     padImage(h_input, width, height);
@@ -258,10 +260,17 @@ int main() {
     fft1DRowKernel<<<grid, block>>>(d_input, d_realOut, d_imagOut, width, height);
     cudaDeviceSynchronize();
 
-    // FFT directa: columnas
-    fft1DColKernel<<<grid, block>>>(d_realOut, d_realOut, d_imagOut, width, height);
+    // FFT directa: columnas con buffer temporal
+    float* d_tempReal;
+    cudaMalloc(&d_tempReal, sizeof(float) * width * height);
+
+    fft1DColKernel<<<grid, block>>>(d_realOut, d_tempReal, d_imagOut, width, height);
     cudaDeviceSynchronize();
 
+    cudaMemcpy(d_realOut, d_tempReal, sizeof(float) * width * height, cudaMemcpyDeviceToDevice);
+    cudaFree(d_tempReal);
+
+    // Magnitud y visualización
     float* h_real = new float[width * height];
     float* h_imag = new float[width * height];
     float* h_magnitude = new float[width * height];
@@ -271,21 +280,32 @@ int main() {
 
     calculateMagnitudeAndNormalize(h_real, h_imag, h_magnitude, width, height);
     applyFFTShift(h_magnitude, width, height);
-
     savePGM(outputFFT, h_magnitude, width, height);
     std::cout << "Imagen de la magnitud FFT guardada como " << outputFFT << "\n";
 
-    // FFT inversa
+    // Poner imagOut a cero antes de la IFFT
+    cudaMemset(d_imagOut, 0, sizeof(float) * width * height);
+
+    // FFT inversa: columnas y luego filas
     ifft1DColKernel<<<grid, block>>>(d_realOut, d_imagOut, d_realOut, width, height);
     cudaDeviceSynchronize();
 
     ifft1DRowKernel<<<grid, block>>>(d_realOut, d_imagOut, d_realOut, width, height);
     cudaDeviceSynchronize();
 
+
+    // Recibir imagen reconstruida
     float* h_reconstructed = new float[width * height];
     cudaMemcpy(h_reconstructed, d_realOut, sizeof(float) * width * height, cudaMemcpyDeviceToHost);
 
-    savePGM(outputReconstructed, h_reconstructed, width, height);
+    for (int i = 0; i < width * height; ++i)
+    h_reconstructed[i] /= (width * height);
+
+    // Recortar a tamaño original
+    float* h_final = new float[originalWidth * originalHeight];
+    cropImage(h_reconstructed, h_final, originalWidth, originalHeight, width);
+
+    savePGM(outputReconstructed, h_final, originalWidth, originalHeight);
     std::cout << "Imagen reconstruida guardada como " << outputReconstructed << "\n";
 
     // Liberar memoria
@@ -294,6 +314,8 @@ int main() {
     delete[] h_imag;
     delete[] h_magnitude;
     delete[] h_reconstructed;
+    delete[] h_final;
+
     cudaFree(d_input);
     cudaFree(d_realOut);
     cudaFree(d_imagOut);
