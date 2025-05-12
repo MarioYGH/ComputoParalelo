@@ -1,6 +1,7 @@
 import numpy as np
 from PIL import Image
 import math
+import time
 
 # ------------------------
 # Leer archivo PGM (P2)
@@ -127,11 +128,12 @@ def ifft_1d_col(real, imag, width, height):
 
 
 # ------------------------
-# Función principal
 def main():
     input_file = "barbara.ascii.pgm"
     output_fft = "resultado.pgm"
     output_reconstructed = "reconstruida.pgm"
+
+    start_total = time.time()
 
     # Cargar imagen
     data, width, height = load_pgm(input_file)
@@ -140,27 +142,36 @@ def main():
     # Ajustar tamaño a potencia de 2
     padded_data, new_width, new_height = pad_image(data, width, height)
 
-    # Realizar FFT
+    # ------------------------
+    # FFT directa
+    start_fft = time.time()
     real_out, imag_out = fft_1d_row(padded_data, new_width, new_height)
     real_out, imag_out = fft_1d_col(real_out, new_width, new_height)
+    end_fft = time.time()
+    print(f"Tiempo FFT directa: {(end_fft - start_fft)*1000:.2f} ms")
 
-    # Calcular magnitud y normalizar
+    # ------------------------
+    # Magnitud y FFT shift
+    start_mag = time.time()
     magnitude = calculate_magnitude_and_normalize(real_out, imag_out, new_width, new_height)
-
-    # Aplicar FFT shift
     shifted_magnitude = apply_fft_shift(magnitude, new_width, new_height)
-
-    # Guardar imagen FFT
     save_pgm(output_fft, shifted_magnitude)
+    end_mag = time.time()
+    print(f"Tiempo magnitud + shift + guardado: {(end_mag - start_mag)*1000:.2f} ms")
     print(f"Imagen de la magnitud FFT guardada como {output_fft}")
 
-    # Realizar IFFT
+    # ------------------------
+    # IFFT (reconstrucción)
+    start_ifft = time.time()
     ifft_result = ifft_1d_col(real_out, imag_out, new_width, new_height)
     ifft_result = ifft_1d_row(ifft_result, imag_out, new_width, new_height)
-
-    # Guardar imagen reconstruida
     save_pgm(output_reconstructed, ifft_result)
+    end_ifft = time.time()
+    print(f"Tiempo IFFT + guardado: {(end_ifft - start_ifft)*1000:.2f} ms")
     print(f"Imagen reconstruida guardada como {output_reconstructed}")
+
+    end_total = time.time()
+    print(f"Tiempo total del proceso: {(end_total - start_total)*1000:.2f} ms")
 
 
 if __name__ == "__main__":
