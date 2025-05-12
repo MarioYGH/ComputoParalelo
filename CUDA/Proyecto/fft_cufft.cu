@@ -78,6 +78,12 @@ int nextPowerOfTwo(int x) {
     return power;
 }
 
+// ------------------------
+
+void printElapsedTime(const char* label, float milliseconds) {
+    std::cout << label << ": " << milliseconds << " ms\n";
+}
+
 void padImage(float*& data, int& width, int& height) {
     int newWidth = nextPowerOfTwo(width);
     int newHeight = nextPowerOfTwo(height);
@@ -102,26 +108,36 @@ void applyFFTShift(float* data, int width, int height) {
     int halfW = width / 2;
     int halfH = height / 2;
 
+    // Swap top-left ↔ bottom-right
     for (int y = 0; y < halfH; ++y) {
         for (int x = 0; x < halfW; ++x) {
-            int idx1 = IDX(x, y, width);
-            int idx2 = IDX(x + halfW, y + halfH, width);
-            int idx3 = IDX(x + halfW, y, width);
-            int idx4 = IDX(x, y + halfH, width);
-
+            int idx1 = y * width + x;
+            int idx2 = (y + halfH) * width + (x + halfW);
             std::swap(data[idx1], data[idx2]);
-            std::swap(data[idx3], data[idx4]);
+        }
+    }
+
+    // Swap top-right ↔ bottom-left
+    for (int y = 0; y < halfH; ++y) {
+        for (int x = halfW; x < width; ++x) {
+            int idx1 = y * width + x;
+            int idx2 = (y + halfH) * width + (x - halfW);
+            std::swap(data[idx1], data[idx2]);
         }
     }
 }
 
 int main() {
     const char* input = "barbara.ascii.pgm";
-    const char* outputFFT = "resultado.pgm";
-    const char* outputReconstructed = "reconstruida.pgm";
+    const char* outputFFT = "resultadoFinalCuda.pgm";
+    const char* outputReconstructed = "reconstruidaFinalCuda.pgm";
 
     float* h_input;
     int width, height;
+
+    cudaEvent_t startFFT, endFFT;
+    cudaEventCreate(&startFFT);
+    cudaEventCreate(&endFFT);
 
     if (!loadPGM(input, &h_input, &width, &height)) {
         std::cerr << "Error al cargar imagen.\n";
@@ -143,22 +159,37 @@ int main() {
 
     cufftHandle planR2C;
     cufftPlan2d(&planR2C, height, width, CUFFT_R2C);
+
+    cudaEventRecord(startFFT);
     cufftExecR2C(planR2C, d_dataReal, d_dataComplex);
+    cudaEventRecord(endFFT);
+    cudaEventSynchronize(endFFT);
+    float fftTime = 0;
+    cudaEventElapsedTime(&fftTime, startFFT, endFFT);
+    std::cout << "Tiempo de ejecución FFT: " << fftTime << " ms\n";
 
     cufftComplex* h_complex = new cufftComplex[width * (height / 2 + 1)];
     cudaMemcpy(h_complex, d_dataComplex, sizeof(cufftComplex) * width * (height / 2 + 1), cudaMemcpyDeviceToHost);
 
+    // ------------------------------------------
+    // FIXED: Magnitude computation with symmetry
     float* h_magnitude = new float[width * height]();
     for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width / 2 + 1; ++x) {
-            int idx = y * (width / 2 + 1) + x;
-            float real = h_complex[idx].x;
-            float imag = h_complex[idx].y;
-            float mag = sqrtf(real * real + imag * imag);
-            h_magnitude[IDX(x, y, width)] = logf(1.0f + mag);
+        for (int x = 0; x < width; ++x) {
+            int fftX = x < (width / 2 + 1) ? x : width - x;
+
+            if (fftX >= 0 && fftX < (width / 2 + 1)) {
+                int idx = y * (width / 2 + 1) + fftX;
+                float real = h_complex[idx].x;
+                float imag = h_complex[idx].y;
+                float mag = sqrtf(real * real + imag * imag);
+
+                h_magnitude[IDX(x, y, width)] = logf(1.0f + mag);
+            }
         }
     }
 
+    // Normalize for PGM output
     float maxVal = *std::max_element(h_magnitude, h_magnitude + size);
     for (int i = 0; i < size; ++i)
         h_magnitude[i] = 255.0f * h_magnitude[i] / maxVal;
@@ -167,9 +198,23 @@ int main() {
     savePGM(outputFFT, h_magnitude, width, height);
     std::cout << "Imagen de la magnitud FFT guardada como " << outputFFT << "\n";
 
+    // ------------------------------------------
+
+    cudaEvent_t startIFFT, endIFFT;
+    cudaEventCreate(&startIFFT);
+    cudaEventCreate(&endIFFT);
+    // Inverse FFT (Reconstruction)
     cufftHandle planC2R;
     cufftPlan2d(&planC2R, height, width, CUFFT_C2R);
+
+    cudaEventRecord(startIFFT);
     cufftExecC2R(planC2R, d_dataComplex, d_dataReal);
+    cudaEventRecord(endIFFT);
+    cudaEventSynchronize(endIFFT);
+
+    float ifftTime = 0;
+    cudaEventElapsedTime(&ifftTime, startIFFT, endIFFT);
+    printElapsedTime("Tiempo de ejecución IFFT (reconstrucción)", ifftTime);
 
     float* h_reconstructed = new float[size];
     cudaMemcpy(h_reconstructed, d_dataReal, sizeof(float) * size, cudaMemcpyDeviceToHost);
@@ -180,6 +225,7 @@ int main() {
     savePGM(outputReconstructed, h_reconstructed, width, height);
     std::cout << "Imagen reconstruida guardada como " << outputReconstructed << "\n";
 
+    // Cleanup
     delete[] h_input;
     delete[] h_complex;
     delete[] h_magnitude;
