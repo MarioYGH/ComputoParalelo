@@ -701,6 +701,7 @@ int main() {
     // --- Spectral Analysis AFTER IFFT (using temporary cuFFT on reconstructed image) ---
     performSpectralAnalysis("Reconstructed Image", h_ifft_output_image, width, height);
 
+    performSpectralAnalysis("FFT Image", h_fft_magnitude_output, width, height);
 
     // Clean up
     delete[] h_input_image_original; // Original image (before padding)
